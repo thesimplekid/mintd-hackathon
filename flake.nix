@@ -26,8 +26,28 @@
           paths = [ "crates/cashu" "crates/cashu-sdk" ];
         };
 
+        toolchainArgs = let llvmPackages = pkgs.llvmPackages_11;
+        in {
+          extraRustFlags = "--cfg tokio_unstable";
+
+          components = [ "rustc" "cargo" "clippy" "rust-analyzer" "rust-src" ];
+
+          args = {
+            nativeBuildInputs =
+              [ pkgs.wasm-bindgen-cli pkgs.geckodriver pkgs.wasm-pack ]
+              ++ lib.optionals (!pkgs.stdenv.isDarwin) [ pkgs.firefox ];
+          };
+        } // lib.optionalAttrs pkgs.stdenv.isDarwin {
+          # on Darwin newest stdenv doesn't seem to work
+          # linking rocksdb
+          stdenv = pkgs.clang11Stdenv;
+          clang = llvmPackages.clang;
+          libclang = llvmPackages.libclang.lib;
+          clang-unwrapped = llvmPackages.clang-unwrapped;
+        };
+
         targetsStd = flakeboxLib.mkStdTargets { };
-        toolchainsStd = flakeboxLib.mkStdToolchains { };
+        toolchainsStd = flakeboxLib.mkStdFenixToolchains toolchainArgs;
 
         toolchainNative = flakeboxLib.mkFenixToolchain {
           targets = (pkgs.lib.getAttrs [ "default" "wasm32-unknown" ] targetsStd);
@@ -55,6 +75,12 @@
           toolchain = toolchainNative;
           packages = [ ];
           nativeBuildInputs = with pkgs; [ wasm-pack sqlx-cli ];
+          shellHook = ''
+            export RUSTFLAGS="--cfg tokio_unstable"
+            export RUSTDOCFLAGS="--cfg tokio_unstable"
+            export RUST_LOG="info"
+          '';
+        
         };
       });
 }

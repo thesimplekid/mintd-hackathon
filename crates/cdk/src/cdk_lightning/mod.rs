@@ -142,7 +142,7 @@ pub trait MintLightning {
     /// Listen for invoices to be paid
     async fn wait_invoice(
         &self,
-    ) -> Result<Pin<Box<dyn Stream<Item = (Bolt11Invoice, Option<u64>)> + Send>>, Self::Err>;
+    ) -> Result<Pin<Box<dyn Stream<Item = Option<Bolt11Invoice>> + Send>>, Self::Err>;
 
     /// Check status of invoice
     async fn check_invoice_status(&self, payment_hash: &Sha256)
