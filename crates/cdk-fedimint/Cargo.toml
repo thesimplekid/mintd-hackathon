@@ -19,3 +19,4 @@ tracing.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 multimint = "0.3.7"
+tokio-stream = "0.1.15"
