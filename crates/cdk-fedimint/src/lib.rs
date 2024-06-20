@@ -1,5 +1,6 @@
 //! CDK lightning backend for CLN
 
+use std::f32::consts::E;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::str::FromStr;
@@ -11,23 +12,20 @@ use cdk::cdk_lightning::{
     self, Amount, BalanceResponse, InvoiceInfo, MintLightning, PayInvoiceResponse,
 };
 use cdk::types::InvoiceStatus;
-use cdk::util::{hex, unix_time};
 use cdk::{Bolt11Invoice, Sha256};
 use error::Error;
-use futures::{FutureExt, Stream, StreamExt};
+use futures::stream::StreamExt;
+use futures::Stream;
 use multimint::fedimint_client::ClientHandleArc;
 use multimint::fedimint_core::api::InviteCode;
-use multimint::fedimint_core::config::FederationId;
-use multimint::fedimint_core::core::OperationId;
 use multimint::fedimint_core::Amount as FedimintAmount;
 use multimint::fedimint_ln_client::{
     LightningClientModule, LnReceiveState, OutgoingLightningPayment,
 };
-use multimint::fedimint_ln_common::bitcoin::hashes::hex::ToHex;
 use multimint::fedimint_ln_common::lightning_invoice::{Bolt11InvoiceDescription, Description};
 use multimint::MultiMint;
 use tokio::sync::Mutex;
-use uuid::Uuid;
+use tokio_stream::wrappers::ReceiverStream;
 
 pub mod error;
 
@@ -76,7 +74,9 @@ impl MintLightning for Fedimint {
     async fn wait_invoice(
         &self,
     ) -> Result<Pin<Box<dyn Stream<Item = Option<Bolt11Invoice>> + Send>>, Self::Err> {
-        self.receiver.lock().await.take().unwrap().into_stream()
+        let receiver = self.receiver.lock().await.take().ok_or(Error::NoReceiver)?;
+        let receiver_stream = ReceiverStream::new(receiver);
+        Ok(Box::pin(receiver_stream.map(|invoice| Some(invoice))))
     }
 
     async fn check_invoice_status(
@@ -167,19 +167,5 @@ impl MintLightning for Fedimint {
         });
 
         Ok(invoice)
-    }
-}
-
-pub fn fee_reserve(invoice_amount: Amount) -> Amount {
-    let fee_reserse = (invoice_amount.to_sat() as f64 * 0.01) as u64;
-
-    Amount::from_sat(fee_reserse)
-}
-
-pub fn cln_invoice_status_to_status(status: ListinvoicesInvoicesStatus) -> InvoiceStatus {
-    match status {
-        ListinvoicesInvoicesStatus::UNPAID => InvoiceStatus::Unpaid,
-        ListinvoicesInvoicesStatus::PAID => InvoiceStatus::Paid,
-        ListinvoicesInvoicesStatus::EXPIRED => InvoiceStatus::Expired,
     }
 }
