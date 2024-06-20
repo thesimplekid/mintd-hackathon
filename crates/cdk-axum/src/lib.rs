@@ -1,5 +1,6 @@
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use axum::extract::{Json, Path, State};
@@ -19,11 +20,17 @@ use cdk::nuts::{
     MintBolt11Request, MintBolt11Response, MintInfo, MintQuoteBolt11Request,
     MintQuoteBolt11Response, RestoreRequest, RestoreResponse, SwapRequest, SwapResponse,
 };
-use cdk::types::MintQuote;
+use cdk::types::{
+    MeltFedimintRequest, MeltFedimintResponse, MintFedimintRequest, MintFedimintResponse, MintQuote,
+};
 use cdk::util::unix_time;
 use cdk::{Amount, Bolt11Invoice};
 use futures::StreamExt;
+use multimint::fedimint_client::ClientHandleArc;
+use multimint::fedimint_core::Amount as FedimintAmount;
+use multimint::fedimint_mint_client::{MintClientModule, ReissueExternalNotesState};
 use tower_http::cors::CorsLayer;
+use tracing::info;
 
 pub async fn start_server(
     mint_url: &str,
@@ -31,6 +38,7 @@ pub async fn start_server(
     listen_port: u16,
     mint: Mint,
     ln: Arc<dyn MintLightning<Err = cdk_lightning::Error> + Send + Sync>,
+    fedimint_client: Option<ClientHandleArc>,
 ) -> Result<()> {
     let mint_clone = Arc::new(mint.clone());
     let ln_clone = ln.clone();
@@ -50,9 +58,10 @@ pub async fn start_server(
         ln,
         mint,
         mint_url: mint_url.to_string(),
+        fedimint_client: fedimint_client.clone(),
     };
 
-    let mint_service = Router::new()
+    let mut mint_service = Router::new()
         .route("/v1/keys", get(get_keys))
         .route("/v1/keysets", get(get_keysets))
         .route("/v1/keys/:keyset_id", get(get_keyset_pubkeys))
@@ -71,7 +80,17 @@ pub async fn start_server(
         .route("/v1/melt/bolt11", post(post_melt_bolt11))
         .route("/v1/checkstate", post(post_check))
         .route("/v1/info", get(get_mint_info))
-        .route("/v1/restore", post(post_restore))
+        .route("/v1/restore", post(post_restore));
+
+    let fedimint_service = Router::new()
+        .route("/v1/mint/fedimint", post(post_mint_fedimint))
+        .route("/v1/melt/fedimint", post(post_melt_fedimint));
+
+    if fedimint_client.is_some() {
+        mint_service = mint_service.merge(fedimint_service);
+    }
+
+    let app = mint_service
         .layer(CorsLayer::very_permissive().allow_headers([
             AUTHORIZATION,
             CONTENT_TYPE,
@@ -83,7 +102,7 @@ pub async fn start_server(
     let listener =
         tokio::net::TcpListener::bind(format!("{}:{}", listen_addr, listen_port)).await?;
 
-    axum::serve(listener, mint_service).await?;
+    axum::serve(listener, app).await?;
 
     Ok(())
 }
@@ -116,6 +135,7 @@ struct MintState {
     ln: Arc<dyn MintLightning<Err = cdk_lightning::Error> + Send + Sync>,
     mint: Mint,
     mint_url: String,
+    fedimint_client: Option<ClientHandleArc>,
 }
 
 async fn get_keys(State(state): State<MintState>) -> Result<Json<KeysResponse>, Response> {
@@ -361,4 +381,89 @@ where
         Json::<ErrorResponse>(error.into()),
     )
         .into_response()
+}
+
+async fn post_mint_fedimint(
+    State(state): State<MintState>,
+    Json(request): Json<MintFedimintRequest>,
+) -> Result<Json<MintFedimintResponse>, Response> {
+    let amount_msat = request.notes.total_amount();
+    let client = state
+        .fedimint_client
+        .ok_or(into_response(Error::FedimintClientNotInitialized))?;
+    let mint = client.get_first_module::<MintClientModule>();
+
+    let operation_id = mint
+        .reissue_external_notes(request.notes, ())
+        .await
+        .map_err(|e| {
+            into_response(Error::CustomError(format!(
+                "Failed to reissue notes: {}",
+                e
+            )))
+        })?;
+
+    let mut updates = mint
+        .subscribe_reissue_external_notes(operation_id)
+        .await
+        .map_err(|e| {
+            into_response(Error::CustomError(format!(
+                "Failed to subscribe to reissue operation: {}",
+                e
+            )))
+        })?
+        .into_stream();
+
+    while let Some(update) = updates.next().await {
+        if let ReissueExternalNotesState::Failed(e) = update {
+            return Err(into_response(Error::FedimintReissueFailed(e)));
+        }
+    }
+
+    info!("Received {amount_msat} in fedimint ecash, minting {amount_msat} of cashu ecash");
+
+    let mut signatures = vec![];
+
+    for output in request.outputs {
+        let signature = state.mint.blind_sign(&output).await.unwrap();
+        signatures.push(signature.clone());
+
+        state
+            .mint
+            .localstore
+            .add_blinded_signature(output.blinded_secret, signature)
+            .await
+            .unwrap();
+    }
+
+    Ok(Json(MintFedimintResponse { signatures }))
+}
+
+async fn post_melt_fedimint(
+    State(state): State<MintState>,
+    Json(request): Json<MeltFedimintRequest>,
+) -> Result<Json<MeltFedimintResponse>, Response> {
+    let client = state
+        .fedimint_client
+        .ok_or(into_response(Error::FedimintClientNotInitialized))?;
+    let mint = client.get_first_module::<MintClientModule>();
+
+    state
+        .mint
+        .verify_melt_fedimint_request(&request)
+        .await
+        .map_err(into_response)?;
+
+    let total_amount: cdk::Amount = request.inputs.iter().map(|p| p.amount.into()).sum();
+
+    let (_, notes) = mint
+        .spend_notes(
+            FedimintAmount::from_sats(total_amount.into()),
+            Duration::from_secs(60),
+            true,
+            (),
+        )
+        .await
+        .map_err(|e| into_response(Error::CustomError(format!("Failed to spend notes: {}", e))))?;
+    Ok(Json(MeltFedimintResponse { notes }))
 }

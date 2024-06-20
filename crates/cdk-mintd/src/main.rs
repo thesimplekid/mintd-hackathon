@@ -8,6 +8,7 @@ use anyhow::anyhow;
 use cdk::cdk_database::{self, MintDatabase};
 use cdk::cdk_lightning::MintLightning;
 use cdk::mint::Mint;
+use cdk::multimint::fedimint_client::ClientHandleArc;
 use cdk::nuts::MintInfo;
 use cdk::{cdk_lightning, Amount, Mnemonic};
 use cdk_cln::Cln;
@@ -67,48 +68,58 @@ async fn main() -> anyhow::Result<()> {
     )
     .await?;
 
-    let ln: Arc<dyn MintLightning<Err = cdk_lightning::Error> + Send + Sync> =
-        match settings.ln.ln_backend {
-            LnBackend::Cln => {
-                let cln_socket = expand_path(
-                    settings
-                        .ln
-                        .cln_path
-                        .clone()
-                        .ok_or(anyhow!("cln socket not defined"))?
-                        .to_str()
-                        .ok_or(anyhow!("cln socket not defined"))?,
-                )
-                .ok_or(anyhow!("cln socket not defined"))?;
-
-                Arc::new(Cln::new(cln_socket, None).await?)
-            }
-            LnBackend::Fedimint => {
-                let work_dir = expand_path(
-                    settings
-                        .ln
-                        .fedimint_work_dir
-                        .clone()
-                        .ok_or(anyhow!("fedimint work dir not defined"))?
-                        .to_str()
-                        .ok_or(anyhow!("fedimint work dir not defined"))?,
-                )
-                .ok_or(anyhow!("fedimint workdir not defined"))?;
-
-                let invite_code = settings
+    let (ln, fedimint_client): (
+        Arc<dyn MintLightning<Err = cdk_lightning::Error> + Send + Sync>,
+        Option<ClientHandleArc>,
+    ) = match settings.ln.ln_backend {
+        LnBackend::Cln => {
+            let cln_socket = expand_path(
+                settings
                     .ln
-                    .fedimint_invite_code
-                    .ok_or(anyhow!("fedimint workdir not defined"))?;
+                    .cln_path
+                    .clone()
+                    .ok_or(anyhow!("cln socket not defined"))?
+                    .to_str()
+                    .ok_or(anyhow!("cln socket not defined"))?,
+            )
+            .ok_or(anyhow!("cln socket not defined"))?;
 
-                Arc::new(Fedimint::new(work_dir, &invite_code).await?)
-            }
-        };
+            (Arc::new(Cln::new(cln_socket, None).await?), None)
+        }
+        LnBackend::Fedimint => {
+            let work_dir = expand_path(
+                settings
+                    .ln
+                    .fedimint_work_dir
+                    .clone()
+                    .ok_or(anyhow!("fedimint work dir not defined"))?
+                    .to_str()
+                    .ok_or(anyhow!("fedimint work dir not defined"))?,
+            )
+            .ok_or(anyhow!("fedimint workdir not defined"))?;
+
+            let invite_code = settings
+                .ln
+                .fedimint_invite_code
+                .ok_or(anyhow!("fedimint workdir not defined"))?;
+            let fedimint = Fedimint::new(work_dir, &invite_code).await?;
+            (Arc::new(fedimint.clone()), Some(fedimint.client))
+        }
+    };
 
     let mint_url = settings.info.url;
     let listen_addr = settings.info.listen_host;
     let listen_port = settings.info.listen_port;
 
-    cdk_axum::start_server(&mint_url, &listen_addr, listen_port, mint, ln).await?;
+    cdk_axum::start_server(
+        &mint_url,
+        &listen_addr,
+        listen_port,
+        mint,
+        ln,
+        fedimint_client,
+    )
+    .await?;
 
     Ok(())
 }

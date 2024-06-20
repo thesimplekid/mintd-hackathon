@@ -78,6 +78,12 @@ pub enum Error {
     /// Custom error
     #[error("`{0}`")]
     CustomError(String),
+    /// Fedimint client not initialized
+    #[error("Fedimint client not initialized")]
+    FedimintClientNotInitialized,
+    /// Fedimint reissue failed
+    #[error("Fedimint reissue failed")]
+    FedimintReissueFailed(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

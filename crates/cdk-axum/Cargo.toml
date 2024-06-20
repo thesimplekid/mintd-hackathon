@@ -17,3 +17,5 @@ tokio.workspace = true
 tower-http = { version = "0.5.2", features = ["cors"] }
 tracing.workspace = true
 futures = "0.3.28"
+serde = { workspace = true, features = ["derive"] }
+multimint = "0.3.5"

@@ -13,7 +13,7 @@ use crate::cdk_database::{self, MintDatabase};
 use crate::dhke::{hash_to_curve, sign_message, verify_message};
 use crate::nuts::nut11::enforce_sig_flag;
 use crate::nuts::*;
-use crate::types::{MeltQuote, MintQuote};
+use crate::types::{MeltFedimintRequest, MeltQuote, MintQuote};
 use crate::url::UncheckedUrl;
 use crate::util::unix_time;
 use crate::Amount;
@@ -302,7 +302,10 @@ impl Mint {
     }
 
     /// Blind Sign
-    async fn blind_sign(&self, blinded_message: &BlindedMessage) -> Result<BlindSignature, Error> {
+    pub async fn blind_sign(
+        &self,
+        blinded_message: &BlindedMessage,
+    ) -> Result<BlindSignature, Error> {
         let BlindedMessage {
             amount,
             blinded_secret,
@@ -616,6 +619,47 @@ impl Mint {
         }
 
         Ok(quote)
+    }
+
+    pub async fn verify_melt_fedimint_request(
+        &self,
+        request: &MeltFedimintRequest,
+    ) -> Result<(), Error> {
+        let input_keyset_ids: HashSet<Id> = request.inputs.iter().map(|p| p.keyset_id).collect();
+
+        let mut keyset_units = HashSet::with_capacity(input_keyset_ids.capacity());
+
+        for id in input_keyset_ids {
+            let keyset = self
+                .localstore
+                .get_keyset_info(&id)
+                .await?
+                .ok_or(Error::UnknownKeySet)?;
+            keyset_units.insert(keyset.unit);
+        }
+
+        // Check that all input and output proofs are the same unit
+        if keyset_units.len().gt(&1) {
+            return Err(Error::MultipleUnits);
+        }
+
+        let secrets: HashSet<[u8; 33]> = request
+            .inputs
+            .iter()
+            .flat_map(|p| hash_to_curve(&p.secret.to_bytes()))
+            .map(|p| p.to_bytes())
+            .collect();
+
+        // Ensure proofs are unique and not being double spent
+        if request.inputs.len().ne(&secrets.len()) {
+            return Err(Error::DuplicateProofs);
+        }
+
+        for proof in &request.inputs {
+            self.verify_proof(proof).await?;
+        }
+
+        Ok(())
     }
 
     /// Process melt request marking [`Proofs`] as spent

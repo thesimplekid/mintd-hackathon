@@ -29,3 +29,5 @@ pub use self::util::SECP256K1;
 pub use self::wallet::client::HttpClient;
 
 pub type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
+
+pub use multimint;

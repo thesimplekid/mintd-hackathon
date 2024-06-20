@@ -33,7 +33,7 @@ pub mod error;
 
 #[derive(Clone)]
 pub struct Fedimint {
-    client: ClientHandleArc,
+    pub client: ClientHandleArc,
     sender: tokio::sync::mpsc::Sender<Bolt11Invoice>,
     receiver: Arc<Mutex<Option<tokio::sync::mpsc::Receiver<Bolt11Invoice>>>>,
 }

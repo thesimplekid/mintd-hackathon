@@ -1,10 +1,14 @@
 //! Types
 
+use multimint::fedimint_mint_client::OOBNotes;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::error::Error;
-use crate::nuts::{CurrencyUnit, Proof, Proofs, PublicKey, SpendingConditions, State};
+use crate::nuts::{
+    BlindSignature, BlindedMessage, CurrencyUnit, Proof, Proofs, PublicKey, SpendingConditions,
+    State,
+};
 use crate::url::UncheckedUrl;
 use crate::Amount;
 
@@ -164,4 +168,25 @@ impl ProofInfo {
 
         true
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MintFedimintRequest {
+    pub notes: OOBNotes,
+    pub outputs: Vec<BlindedMessage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MintFedimintResponse {
+    pub signatures: Vec<BlindSignature>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MeltFedimintRequest {
+    pub inputs: Proofs,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MeltFedimintResponse {
+    pub notes: OOBNotes,
 }
