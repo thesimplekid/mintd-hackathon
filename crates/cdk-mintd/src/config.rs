@@ -45,8 +45,8 @@ fn last_pay_path() -> String {
 pub enum LnBackend {
     #[default]
     Cln,
-    //  Greenlight,
-    //  Ldk,
+    Fedimint, //  Greenlight,
+              //  Ldk,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -57,6 +57,8 @@ pub struct Ln {
     pub invoice_description: Option<String>,
     pub fee_percent: f64,
     pub reserve_fee_min: Amount,
+    pub fedimint_work_dir: Option<PathBuf>,
+    pub fedimint_invite_code: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
@@ -121,8 +123,11 @@ impl Settings {
 
         match settings.ln.ln_backend {
             LnBackend::Cln => assert!(settings.ln.cln_path.is_some()),
-            //LnBackend::Greenlight => (),
-            //LnBackend::Ldk => (),
+            LnBackend::Fedimint => assert!(
+                settings.ln.fedimint_work_dir.is_some()
+                    && settings.ln.fedimint_invite_code.is_some()
+            ), //LnBackend::Greenlight => (),
+               //LnBackend::Ldk => (),
         }
 
         Ok(settings)

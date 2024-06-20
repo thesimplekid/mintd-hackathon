@@ -7,14 +7,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use cdk::cdk_lightning::{
-    self, Amount, BalanceResponse, InvoiceInfo, MintLightning, PayInvoiceResponse,
-};
+use cdk::cdk_lightning::{self, Amount, BalanceResponse, MintLightning, PayInvoiceResponse};
 use cdk::types::InvoiceStatus;
 use cdk::util::{hex, unix_time};
-use cdk::{Bolt11Invoice, Sha256};
+use cdk::Bolt11Invoice;
 use cln_rpc::model::requests::{
-    InvoiceRequest, ListfundsRequest, ListinvoicesRequest, PayRequest, WaitanyinvoiceRequest,
+    InvoiceRequest, ListfundsRequest, PayRequest, WaitanyinvoiceRequest,
 };
 use cln_rpc::model::responses::{
     ListfundsOutputsStatus, ListinvoicesInvoicesStatus, PayStatus, WaitanyinvoiceResponse,
@@ -51,56 +49,9 @@ impl Cln {
 impl MintLightning for Cln {
     type Err = cdk_lightning::Error;
 
-    async fn get_invoice(
-        &self,
-        amount: Amount,
-        hash: &str,
-        description: &str,
-    ) -> Result<InvoiceInfo, Self::Err> {
-        let mut cln_client = cln_rpc::ClnRpc::new(&self.rpc_socket).await?;
-
-        let cln_response = cln_client
-            .call(cln_rpc::Request::Invoice(InvoiceRequest {
-                amount_msat: AmountOrAny::Amount(CLN_Amount::from_sat(amount.to_sat())),
-                description: description.to_string(),
-                label: Uuid::new_v4().to_string(),
-                expiry: None,
-                fallbacks: None,
-                preimage: None,
-                cltv: None,
-                deschashonly: Some(true),
-                exposeprivatechannels: None,
-            }))
-            .await
-            .map_err(Error::from)?;
-
-        match cln_response {
-            cln_rpc::Response::Invoice(invoice_response) => {
-                let invoice = Bolt11Invoice::from_str(&invoice_response.bolt11)?;
-                let payment_hash = Sha256::from_str(&invoice_response.payment_hash.to_string())
-                    .map_err(|_e| Error::Custom("Hash error".to_string()))?;
-                let invoice_info = InvoiceInfo::new(
-                    &payment_hash.to_string(),
-                    hash,
-                    invoice,
-                    amount,
-                    InvoiceStatus::Unpaid,
-                    "",
-                    None,
-                );
-
-                Ok(invoice_info)
-            }
-            _ => {
-                tracing::warn!("CLN returned wrong response kind");
-                return Err(cdk_lightning::Error::from(Error::WrongClnResponse));
-            }
-        }
-    }
-
     async fn wait_invoice(
         &self,
-    ) -> Result<Pin<Box<dyn Stream<Item = (Bolt11Invoice, Option<u64>)> + Send>>, Self::Err> {
+    ) -> Result<Pin<Box<dyn Stream<Item = Option<Bolt11Invoice>> + Send>>, Self::Err> {
         let last_pay_index = self.last_pay_index;
 
         let cln_client = cln_rpc::ClnRpc::new(&self.rpc_socket).await?;
@@ -134,47 +85,13 @@ impl MintLightning for Cln {
 
                     if let Some(bolt11) = invoice.bolt11 {
                         if let Ok(invoice) = Bolt11Invoice::from_str(&bolt11) {
-                            break Some(((invoice, last_pay_idx), (cln_client, last_pay_idx)));
+                            break Some((Some(invoice), (cln_client, last_pay_idx)));
                         }
                     }
                 }
             },
         )
         .boxed())
-    }
-
-    async fn check_invoice_status(
-        &self,
-        payment_hash: &Sha256,
-    ) -> Result<InvoiceStatus, Self::Err> {
-        let mut cln_client = cln_rpc::ClnRpc::new(&self.rpc_socket).await?;
-
-        let cln_response = cln_client
-            .call(Request::ListInvoices(ListinvoicesRequest {
-                payment_hash: Some(payment_hash.to_string()),
-                label: None,
-                invstring: None,
-                offer_id: None,
-                index: None,
-                limit: None,
-                start: None,
-            }))
-            .await
-            .map_err(Error::from)?;
-
-        let status = match cln_response {
-            cln_rpc::Response::ListInvoices(invoice_response) => {
-                let i = invoice_response.invoices[0].clone();
-
-                cln_invoice_status_to_status(i.status)
-            }
-            _ => {
-                tracing::warn!("CLN returned wrong response kind");
-                return Err(Error::Custom("CLN returned wrong response kind".to_string()).into());
-            }
-        };
-
-        Ok(status)
     }
 
     async fn pay_invoice(
@@ -212,8 +129,7 @@ impl MintLightning for Cln {
                 };
                 PayInvoiceResponse {
                     payment_preimage: Some(hex::encode(pay_response.payment_preimage.to_vec())),
-                    payment_hash: Sha256::from_str(&pay_response.payment_hash.to_string())
-                        .map_err(|_| Error::Custom("Hash Error".to_string()))?,
+                    payment_hash: pay_response.payment_hash.to_string(),
                     status,
                     total_spent: Amount::from_msat(pay_response.amount_sent_msat.msat()),
                 }

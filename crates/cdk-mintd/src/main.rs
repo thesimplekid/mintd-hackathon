@@ -11,6 +11,7 @@ use cdk::mint::Mint;
 use cdk::nuts::MintInfo;
 use cdk::{cdk_lightning, Amount, Mnemonic};
 use cdk_cln::Cln;
+use cdk_fedimint::Fedimint;
 use cdk_redb::MintRedbDatabase;
 use cdk_sqlite::MintSqliteDatabase;
 use clap::Parser;
@@ -81,6 +82,25 @@ async fn main() -> anyhow::Result<()> {
                 .ok_or(anyhow!("cln socket not defined"))?;
 
                 Arc::new(Cln::new(cln_socket, None).await?)
+            }
+            LnBackend::Fedimint => {
+                let work_dir = expand_path(
+                    settings
+                        .ln
+                        .fedimint_work_dir
+                        .clone()
+                        .ok_or(anyhow!("fedimint work dir not defined"))?
+                        .to_str()
+                        .ok_or(anyhow!("fedimint work dir not defined"))?,
+                )
+                .ok_or(anyhow!("fedimint workdir not defined"))?;
+
+                let invite_code = settings
+                    .ln
+                    .fedimint_invite_code
+                    .ok_or(anyhow!("fedimint workdir not defined"))?;
+
+                Arc::new(Fedimint::new(work_dir, &invite_code).await?)
             }
         };
 

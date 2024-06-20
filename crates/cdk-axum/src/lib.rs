@@ -38,10 +38,8 @@ pub async fn start_server(
         loop {
             let mut stream = ln_clone.wait_invoice().await.unwrap();
 
-            while let Some((invoice, _pay_index)) = stream.next().await {
-                if let Err(err) =
-                    handle_paid_invoice(mint_clone.clone(), &invoice.to_string()).await
-                {
+            while let Some(invoice) = stream.next().await {
+                if let Err(err) = handle_paid_invoice(mint_clone.clone(), invoice).await {
                     tracing::warn!("{:?}", err);
                 }
             }
@@ -90,22 +88,24 @@ pub async fn start_server(
     Ok(())
 }
 
-async fn handle_paid_invoice(mint: Arc<Mint>, request: &str) -> Result<()> {
+async fn handle_paid_invoice(mint: Arc<Mint>, request: Option<Bolt11Invoice>) -> Result<()> {
     let quotes: Vec<MintQuote> = mint.mint_quotes().await?;
 
-    for quote in quotes {
-        if quote.request.eq(request) {
-            let q = MintQuote {
-                id: quote.id,
-                mint_url: quote.mint_url,
-                amount: quote.amount,
-                unit: quote.unit,
-                request: quote.request,
-                paid: true,
-                expiry: quote.expiry,
-            };
+    if let Some(invoice) = request {
+        for quote in quotes {
+            if quote.request.eq(&invoice.to_string()) {
+                let q = MintQuote {
+                    id: quote.id,
+                    mint_url: quote.mint_url,
+                    amount: quote.amount,
+                    unit: quote.unit,
+                    request: quote.request,
+                    paid: true,
+                    expiry: quote.expiry,
+                };
 
-            mint.update_mint_quote(q).await?;
+                mint.update_mint_quote(q).await?;
+            }
         }
     }
 

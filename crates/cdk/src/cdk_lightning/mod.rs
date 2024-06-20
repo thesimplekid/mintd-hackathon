@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::types::InvoiceStatus;
-use crate::Sha256;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -131,22 +130,10 @@ pub trait MintLightning {
         max_fee: Option<Amount>,
     ) -> Result<PayInvoiceResponse, Self::Err>;
 
-    /// Get an invoice
-    async fn get_invoice(
-        &self,
-        amount: Amount,
-        hash: &str,
-        description: &str,
-    ) -> Result<InvoiceInfo, Self::Err>;
-
     /// Listen for invoices to be paid
     async fn wait_invoice(
         &self,
     ) -> Result<Pin<Box<dyn Stream<Item = Option<Bolt11Invoice>> + Send>>, Self::Err>;
-
-    /// Check status of invoice
-    async fn check_invoice_status(&self, payment_hash: &Sha256)
-        -> Result<InvoiceStatus, Self::Err>;
 
     /// Get ln node balance
     async fn get_balance(&self) -> Result<BalanceResponse, Self::Err>;
@@ -163,7 +150,7 @@ pub struct BalanceResponse {
 /// Pay invoice response
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PayInvoiceResponse {
-    pub payment_hash: Sha256,
+    pub payment_hash: String,
     pub payment_preimage: Option<String>,
     pub status: InvoiceStatus,
     pub total_spent: Amount,

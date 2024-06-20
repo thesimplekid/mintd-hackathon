@@ -10,6 +10,10 @@ pub enum Error {
     Description,
     #[error("Wrong cln response")]
     NoReceiver,
+    #[error("Payment Failed")]
+    PaymentFailed,
+    #[error("Payment Failed")]
+    AmountRequired,
     /// Cln Error
     #[error(transparent)]
     Cln(#[from] cln_rpc::Error),
