@@ -22,7 +22,7 @@ pub mod error;
 
 #[derive(Clone)]
 pub struct Mint {
-    mint_info: MintInfo,
+    pub mint_info: MintInfo,
     keysets: Arc<RwLock<HashMap<Id, MintKeySet>>>,
     secp_ctx: Secp256k1<secp256k1::All>,
     xpriv: ExtendedPrivKey,
