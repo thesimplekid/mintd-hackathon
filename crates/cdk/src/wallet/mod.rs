@@ -11,6 +11,7 @@ use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::XOnlyPublicKey;
 use bitcoin::Network;
 use error::Error;
+use multimint::fedimint_mint_client::OOBNotes;
 use tokio::sync::RwLock;
 use tracing::instrument;
 
@@ -654,6 +655,96 @@ impl Wallet {
                     State::Unspent,
                     quote_info.unit.clone(),
                 )
+            })
+            .collect();
+
+        // Add new proofs to store
+        self.localstore.add_proofs(proofs).await?;
+
+        Ok(minted_amount)
+    }
+
+    pub async fn mint_fedimint(
+        &self,
+        mint_url: &UncheckedUrl,
+        notes: &str,
+        amount_split_target: SplitTarget,
+        spending_conditions: Option<SpendingConditions>,
+    ) -> Result<Amount, Error> {
+        let notes = OOBNotes::from_str(notes).map_err(|e| Error::Custom(e.to_string()))?;
+
+        // Check that mint is in store of mints
+        if self.localstore.get_mint(mint_url.clone()).await?.is_none() {
+            self.add_mint(mint_url.clone()).await?;
+        }
+
+        let amount = Amount::from(notes.total_amount().try_into_sats().unwrap());
+
+        let active_keyset_id = self
+            .active_mint_keyset(&mint_url, &CurrencyUnit::Sat)
+            .await?;
+
+        let count = self
+            .localstore
+            .get_keyset_counter(&active_keyset_id)
+            .await?;
+
+        let count = count.map_or(0, |c| c + 1);
+
+        let premint_secrets = match &spending_conditions {
+            Some(spending_conditions) => PreMintSecrets::with_conditions(
+                active_keyset_id,
+                amount,
+                &amount_split_target,
+                spending_conditions,
+            )?,
+            None => PreMintSecrets::from_xpriv(
+                active_keyset_id,
+                count,
+                self.xpriv,
+                amount,
+                &amount_split_target,
+            )?,
+        };
+
+        let mint_res = self
+            .client
+            .post_mint_fedimint(mint_url.clone().try_into()?, notes, premint_secrets.clone())
+            .await?;
+        let keys = self.get_keyset_keys(&mint_url, active_keyset_id).await?;
+
+        // Verify the signature DLEQ is valid
+        {
+            for (sig, premint) in mint_res.signatures.iter().zip(&premint_secrets.secrets) {
+                let keys = self.get_keyset_keys(&mint_url, sig.keyset_id).await?;
+                let key = keys.amount_key(sig.amount).ok_or(Error::UnknownKey)?;
+                match sig.verify_dleq(key, premint.blinded_message.blinded_secret) {
+                    Ok(_) | Err(nut12::Error::MissingDleqProof) => (),
+                    Err(_) => return Err(Error::CouldNotVerifyDleq),
+                }
+            }
+        }
+
+        let proofs = construct_proofs(
+            mint_res.signatures,
+            premint_secrets.rs(),
+            premint_secrets.secrets(),
+            &keys,
+        )?;
+
+        let minted_amount = proofs.iter().map(|p| p.amount).sum();
+
+        if spending_conditions.is_none() {
+            // Update counter for keyset
+            self.localstore
+                .increment_keyset_counter(&active_keyset_id, proofs.len() as u32)
+                .await?;
+        }
+
+        let proofs = proofs
+            .into_iter()
+            .flat_map(|proof| {
+                ProofInfo::new(proof, mint_url.clone(), State::Unspent, CurrencyUnit::Sat)
             })
             .collect();
 

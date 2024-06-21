@@ -1,5 +1,6 @@
 //! Wallet client
 
+use multimint::fedimint_mint_client::OOBNotes;
 use reqwest::Client;
 use serde_json::Value;
 use tracing::instrument;
@@ -15,6 +16,7 @@ use crate::nuts::{
     MintQuoteBolt11Request, MintQuoteBolt11Response, PreMintSecrets, Proof, PublicKey,
     RestoreRequest, RestoreResponse, SwapRequest, SwapResponse,
 };
+use crate::types::{MintFedimintRequest, MintFedimintResponse};
 use crate::{Amount, Bolt11Invoice};
 
 fn join_url(url: Url, paths: &[&str]) -> Result<Url, Error> {
@@ -158,6 +160,36 @@ impl HttpClient {
             .await?;
 
         match serde_json::from_value::<MintBolt11Response>(res.clone()) {
+            Ok(mint_quote_response) => Ok(mint_quote_response),
+            Err(_) => Err(ErrorResponse::from_value(res)?.into()),
+        }
+    }
+
+    /// Mint Tokens via Fedimint [NUT-XX]
+    #[instrument(skip(self, premint_secrets, notes), fields(mint_url = %mint_url))]
+    pub async fn post_mint_fedimint(
+        &self,
+        mint_url: Url,
+        notes: OOBNotes,
+        premint_secrets: PreMintSecrets,
+    ) -> Result<MintFedimintResponse, Error> {
+        let url = join_url(mint_url, &["v1", "mint", "fedimint"])?;
+
+        let request = MintFedimintRequest {
+            notes,
+            outputs: premint_secrets.blinded_messages(),
+        };
+
+        let res = self
+            .inner
+            .post(url)
+            .json(&request)
+            .send()
+            .await?
+            .json::<Value>()
+            .await?;
+
+        match serde_json::from_value::<MintFedimintResponse>(res.clone()) {
             Ok(mint_quote_response) => Ok(mint_quote_response),
             Err(_) => Err(ErrorResponse::from_value(res)?.into()),
         }
